@@ -282,9 +282,9 @@ test("renderHeatmap always renders 24 buckets and only counts swaps", () => {
   const doc = installFakeDocument(["heatmap"]);
   const now = Date.now();
   renderHeatmap([
-    { type: "swap", timestamp: now, payload: '{"amountIn":100}' },
-    { type: "mint", timestamp: now, payload: '{"amountIn":999999}' },
-  ]);
+    { type: "swap", timestamp: now, payload: '{"token_in":"BBB","token_out":"AAA","amountIn":100}' },
+    { type: "mint", timestamp: now, payload: '{"token_in":"BBB","token_out":"AAA","amountIn":999999}' },
+  ], { tokenA: "AAA", tokenB: "BBB" });
   const heatmap = doc.getElementById("heatmap");
   assert.equal(heatmap.children.length, 24);
   // The newest bucket is last; the mint must not have contributed to it.
@@ -295,9 +295,9 @@ test("renderHeatmap ignores events outside the 24h window", () => {
   const doc = installFakeDocument(["heatmap"]);
   const now = Date.now();
   renderHeatmap([
-    { type: "swap", timestamp: now - 48 * 3_600_000, payload: '{"amountIn":500}' },
-    { type: "swap", timestamp: now + 3_600_000, payload: '{"amountIn":500}' },
-  ]);
+    { type: "swap", timestamp: now - 48 * 3_600_000, payload: '{"token_in":"BBB","token_out":"AAA","amountIn":500}' },
+    { type: "swap", timestamp: now + 3_600_000, payload: '{"token_in":"BBB","token_out":"AAA","amountIn":500}' },
+  ], { tokenA: "AAA", tokenB: "BBB" });
   const heatmap = doc.getElementById("heatmap");
   assert.equal(heatmap.children.length, 24);
   // Nothing landed in a bucket, so every bar sits at the 4px floor.
@@ -309,8 +309,8 @@ test("renderHeatmap swallows a malformed payload without losing other events", (
   const now = Date.now();
   assert.doesNotThrow(() => renderHeatmap([
     { type: "swap", timestamp: now, payload: "{not json" },
-    { type: "swap", timestamp: now, payload: '{"amountIn":250}' },
-  ]));
+    { type: "swap", timestamp: now, payload: '{"token_in":"BBB","token_out":"AAA","amountIn":250}' },
+  ], { tokenA: "AAA", tokenB: "BBB" }));
   const heatmap = doc.getElementById("heatmap");
   assert.equal(heatmap.children.length, 24);
   // The good event still counted: the bad one only skipped itself.
@@ -321,6 +321,29 @@ test("renderHeatmap handles a null event list", () => {
   const doc = installFakeDocument(["heatmap"]);
   assert.doesNotThrow(() => renderHeatmap(null));
   assert.equal(doc.getElementById("heatmap").children.length, 24);
+});
+
+test("renderHeatmap adds quote-token amounts from both swap directions", () => {
+  const doc = installFakeDocument(["heatmap"]);
+  const timestamp = Date.now();
+  renderHeatmap([
+    { type: "swap", timestamp, payload: '{"token_in":"AAA","token_out":"BBB","amountIn":1200,"amountOut":30}' },
+    { type: "swap", timestamp, payload: '{"tokenA":"BBB","tokenB":"AAA","amountIn":"50","amountOut":2000}' },
+  ], { tokenA: "AAA", tokenB: "BBB" });
+
+  assert.equal(doc.getElementById("heatmap").children[23].title, "0h ago: 80.00 BBB base units");
+});
+
+test("renderHeatmap skips unknown directions and invalid quote amounts", () => {
+  const doc = installFakeDocument(["heatmap"]);
+  const timestamp = Date.now();
+  renderHeatmap([
+    { type: "swap", timestamp, payload: '{"amountIn":500}' },
+    { type: "swap", timestamp, payload: '{"token_in":"OTHER","token_out":"BBB","amountIn":90,"amountOut":70}' },
+    { type: "swap", timestamp, payload: '{"token_in":"AAA","token_out":"BBB","amountIn":200,"amountOut":"Infinity"}' },
+  ], { tokenA: "AAA", tokenB: "BBB" });
+
+  assert.equal(doc.getElementById("heatmap").children[23].title, "0h ago: 0.00 BBB base units");
 });
 
 test("renderAlertConfigs shows an empty state when nothing is configured", () => {
@@ -670,8 +693,8 @@ test("renderHeatmap handles second-resolution timestamps", () => {
   const now = Date.now();
   const thirtyMinutesAgoSeconds = Math.floor((now - 30 * 60 * 1000) / 1000);
   renderHeatmap([
-    { type: "swap", timestamp: thirtyMinutesAgoSeconds, payload: '{"amountIn":100}' },
-  ]);
+    { type: "swap", timestamp: thirtyMinutesAgoSeconds, payload: '{"token_in":"BBB","token_out":"AAA","amountIn":100}' },
+  ], { tokenA: "AAA", tokenB: "BBB" });
   const heatmap = doc.getElementById("heatmap");
   // Should have landed in a bucket (not all at 4px floor)
   const hasNonZeroHeight = Array.from(heatmap.children).some(bar => parseInt(bar.style.height) > 4);
