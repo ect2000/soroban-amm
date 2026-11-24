@@ -244,23 +244,50 @@ export function renderHistory(history) {
   }
 }
 
-export function renderHeatmap(events) {
+export function renderHeatmap(events, pool) {
   const heatmap = $("heatmap");
   if (!heatmap) return;
   heatmap.replaceChildren();
   const buckets = new Array(24).fill(0);
   const now = Date.now();
-  for (const event of events || []) {
+  const { tokenA, tokenB } = pool ?? {};
+  const swaps = tokenA && tokenB && tokenA !== tokenB ? events ?? [] : [];
+  for (const event of swaps) {
     if (event.type !== "swap") continue;
+    const ts = Number(event.timestamp);
+    const ms = ts < 1_000_000_00000 ? ts * 1000 : ts;
+    const hoursAgo = Math.floor((now - ms) / 3_600_000);
+    if (!(hoursAgo >= 0 && hoursAgo < 24)) continue;
+
+    let payload;
     try {
-      const ts = Number(event.timestamp);
-      const ms = ts < 1_000_000_00000 ? ts * 1000 : ts;
-      const hoursAgo = Math.floor((now - ms) / 3_600_000);
-      if (hoursAgo >= 0 && hoursAgo < 24) buckets[23 - hoursAgo] += Number(JSON.parse(event.payload || "{}").amountIn || 0);
-    } catch { /* malformed payloads do not break the dashboard */ }
+      payload = JSON.parse(event.payload);
+    } catch {
+      continue; // A malformed event should not invalidate the rest of the chart.
+    }
+    const tokenIn = payload?.token_in ?? payload?.tokenA;
+    const tokenOut = payload?.token_out ?? payload?.tokenB;
+    let rawAmount;
+    if (tokenIn === tokenA && tokenOut === tokenB) rawAmount = payload.amountOut;
+    else if (tokenIn === tokenB && tokenOut === tokenA) rawAmount = payload.amountIn;
+    else continue;
+
+    if (typeof rawAmount !== "number" &&
+        (typeof rawAmount !== "string" || !rawAmount.trim())) continue;
+    const quoteAmount = Number(rawAmount);
+    if (Number.isFinite(quoteAmount) && quoteAmount >= 0) {
+      buckets[23 - hoursAgo] += quoteAmount;
+    }
   }
   const max = Math.max(...buckets, 1);
-  buckets.forEach((amount, index) => { const bar = document.createElement("div"); bar.className = "heatmap-bar"; bar.style.height = `${Math.max(4, amount / max * 56)}px`; bar.title = `${23 - index}h ago: ${formatMetric(amount)}`; heatmap.appendChild(bar); });
+  const unit = tokenB ? ` ${tokenB} base units` : "";
+  buckets.forEach((amount, index) => {
+    const bar = document.createElement("div");
+    bar.className = "heatmap-bar";
+    bar.style.height = `${Math.max(4, amount / max * 56)}px`;
+    bar.title = `${23 - index}h ago: ${formatMetric(amount)}${unit}`;
+    heatmap.appendChild(bar);
+  });
 }
 
 export function renderAlertConfigs(configs, onRemove) {
@@ -304,7 +331,10 @@ export function createDashboardController({ apiUrl, poolId, pollIntervalMs = DEF
       /** @type {Record<string, any>} */ const data = {};
       /** @type {string[]} */ const failures = [];
       results.forEach((result, index) => { const key = Object.keys(QUERY)[index]; if (result.status === "fulfilled") data[key] = result.value; else failures.push(`${key}: ${formatError(result.reason)}`); });
-      renderStats(data.stats?.poolStats, currentPool); renderHealth(currentPool ? data.health?.poolHealth : null, configs); renderEvents(currentPool ? data.events?.poolEvents : []); renderHistory(currentPool ? data.history?.priceHistory : []); renderHeatmap(currentPool ? data.events?.poolEvents : []); if (data.alerts?.alertConfigs) { configs = data.alerts.alertConfigs; renderAlertConfigs(configs, removeAlert); }
+      renderStats(data.stats?.poolStats, currentPool); renderHealth(currentPool ? data.health?.poolHealth : null, configs); renderEvents(currentPool ? data.events?.poolEvents : []); renderHistory(currentPool ? data.history?.priceHistory : []);
+      const selectedPool = currentPool ? data.stats?.poolStats?.find((item) => item.poolId === currentPool) : undefined;
+      renderHeatmap(currentPool ? data.events?.poolEvents : [], selectedPool);
+      if (data.alerts?.alertConfigs) { configs = data.alerts.alertConfigs; renderAlertConfigs(configs, removeAlert); }
       if (failures.length === Object.keys(QUERY).length) { setStatus("Error", "error", failures.join("; ")); setSectionState(`Unable to load dashboard data. ${failures[0]}`); const retry = $("btn-retry"); if (retry) retry.hidden = false; }
       // Retry is only useful when something failed; hide it on a fully successful refresh.
       else { setStatus(failures.length ? "Degraded" : "Connected", failures.length ? "error" : "connected", failures.join("; ")); setSectionState(failures.length ? `Degraded: ${failures.join("; ")}` : data.stats?.poolStats?.length ? "" : "No pools indexed yet"); const retry = $("btn-retry"); if (retry) retry.hidden = !failures.length; setText("last-updated", `Last updated ${new Date().toLocaleTimeString()}`); }
